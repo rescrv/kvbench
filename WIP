@@ -1,0 +1,122 @@
+#if 0
+workload_standard_run :: workload_standard_run()
+    : workload_standard(true)
+    , m_num_ops(1000000)
+{
+    m_ap.arg().name('N', "number")
+              .description("perform N operations against the database (default: 1M)")
+              .metavar("N")
+              .as_long(&m_num_ops);
+}
+
+void
+workload_standard_load :: really_run()
+{
+    m_mtx.lock();
+    armnod_config* keyconf(armnod_config_copy(m_key_parser->config()));
+    armnod_config_choose_fixed(keyconf, m_num_objs);
+    armnod_generator* keygen(armnod_generator_create(keyconf));
+    armnod_generator* valgen(armnod_generator_create(m_val_parser->config()));
+    armnod_seed(keygen, pthread_self());
+    armnod_seed(valgen, pthread_self());
+    uint64_t idx;
+    uint64_t total = m_num_objs;
+    m_mtx.unlock();
+
+    while ((idx = e::atomic::increment_64_nobarrier(&m_ops_done, 1)) <= total)
+    {
+        --idx;
+        size_t key_sz = 0;
+        const char* key = armnod_generate_idx_sz(keygen, idx, &key_sz);
+        size_t val_sz = 0;
+        const char* val = armnod_generate_sz(valgen, &val_sz);
+        assert(key);
+
+        ygor_data_record dr;
+        dr.series = 2;
+        ygor_data_logger_start(m_dl, &dr);
+
+        if (m_rbw)
+        {
+            if (!m_db->get(key, key_sz))
+            {
+                report_error();
+                break;
+            }
+        }
+
+        if (!m_db->put(key, key_sz, val, val_sz))
+        {
+            report_error();
+            break;
+        }
+
+        ygor_data_logger_finish(m_dl, &dr);
+        ygor_data_logger_record(m_dl, &dr);
+    }
+}
+
+void
+workload_standard_run :: really_run()
+{
+    m_mtx.lock();
+    armnod_config* keyconf(armnod_config_copy(m_key_parser->config()));
+    armnod_config_choose_fixed(keyconf, m_num_objs);
+    armnod_generator* keygen(armnod_generator_create(keyconf));
+    armnod_generator* valgen(armnod_generator_create(m_val_parser->config()));
+    armnod_seed(keygen, pthread_self());
+    armnod_seed(valgen, pthread_self());
+    uint64_t total = m_num_ops;
+    armnod_config* opconf(armnod_config_create());
+    armnod_config_choose_fixed(opconf, 256);
+    armnod_generator* opgen(armnod_generator_create(opconf));
+    armnod_seed(opgen, pthread_self());
+    m_mtx.unlock();
+
+    while (e::atomic::increment_64_nobarrier(&m_ops_done, 1) < total && !error())
+    {
+        unsigned idx = armnod_generate_idx_only(opgen);
+        assert(idx < 256);
+        size_t key_sz = 0;
+        const char* key = armnod_generate_sz(keygen, &key_sz);
+        ygor_data_record dr;
+        ygor_data_logger_start(m_dl, &dr);
+
+        if (m_ops[idx] == 'R')
+        {
+            dr.series = 1;
+
+            if (!m_db->get(key, key_sz))
+            {
+                report_error();
+                break;
+            }
+        }
+        else if (m_ops[idx] == 'W')
+        {
+            size_t val_sz = 0;
+            const char* val = armnod_generate_sz(valgen, &val_sz);
+            dr.series = 2;
+
+            if (!m_db->put(key, key_sz, val, val_sz))
+            {
+                report_error();
+                break;
+            }
+        }
+        else
+        {
+            abort();
+        }
+
+        ygor_data_logger_finish(m_dl, &dr);
+        ygor_data_logger_record(m_dl, &dr);
+    }
+
+    armnod_generator_destroy(opgen);
+    armnod_generator_destroy(keygen);
+    armnod_generator_destroy(valgen);
+    armnod_config_destroy(keyconf);
+    armnod_config_destroy(opconf);
+}
+#endif
